@@ -13,17 +13,18 @@ describe("SHO smart contract", function() {
     const whitelistUsers = async(whitelist) => {
         const allocations = whitelist.allocations.map((raw) => parseUnits(raw));
 
-        await expect(contract.whitelistUsers([owner.address], [1, 1])).to.be.revertedWith("PublicSHO: different array lengths");
-        await expect(contract.whitelistUsers([], [])).to.be.revertedWith("PublicSHO: zero length array");
+        await expect(contract.whitelistUsers([owner.address], [1, 1], [0, 0])).to.be.revertedWith("SHO: different array lengths");
+        await expect(contract.whitelistUsers([], [], [])).to.be.revertedWith("SHO: zero length array");
+        await expect(contract.whitelistUsers([owner.address], [1], [2])).to.be.revertedWith("SHO: invalid user option");
 
         contract = contract.connect(user1); 
-        await expect(contract.whitelistUsers(whitelist.wallets, allocations))
+        await expect(contract.whitelistUsers(whitelist.wallets, allocations, whitelist.options))
             .to.be.revertedWith("Ownable: caller is not the owner");
 
         contract = contract.connect(owner); 
-        await contract.whitelistUsers(whitelist.wallets, allocations);
-        await expect(contract.whitelistUsers(whitelist.wallets, allocations))
-            .to.be.revertedWith("PublicSHO: some users are already whitelisted");
+        await contract.whitelistUsers(whitelist.wallets, allocations, whitelist.options);
+        await expect(contract.whitelistUsers(whitelist.wallets, allocations, whitelist.options))
+            .to.be.revertedWith("SHO: some users are already whitelisted");
 
         for (let i = 0; i < whitelist.wallets.length; i++) {
             const userInfo = await contract.users(whitelist.wallets[i]);
@@ -32,36 +33,36 @@ describe("SHO smart contract", function() {
         
         const globalTotalAllocation = whitelist.allocations.reduce((p, c) => p + c);
         await shoToken.transfer(contract.address, parseUnits(globalTotalAllocation));
-        await expect(contract.whitelistUsers([owner.address], [1]))
-            .to.be.revertedWith("PublicSHO: whitelisting too late");
+        await expect(contract.whitelistUsers([owner.address], [1], [0]))
+            .to.be.revertedWith("SHO: whitelisting too late");
 
         expect(await contract.globalTotalAllocation()).to.equal(parseUnits(globalTotalAllocation));
     }
 
     const testConstructorRequireStatements = async(unlockPercentages, unlockPeriods, initialFee, startTime) => {
-        const Contract = await ethers.getContractFactory("PublicSHO");
+        const Contract = await ethers.getContractFactory("SHO");
 
         await expect(Contract.deploy(ethers.constants.AddressZero, unlockPercentages, unlockPeriods, initialFee, feeCollector.address, startTime))
-            .to.be.revertedWith("PublicSHO: sho token zero address");
+            .to.be.revertedWith("SHO: sho token zero address");
 
         await expect(Contract.deploy(shoToken.address, [], unlockPeriods, initialFee, feeCollector.address, startTime))
-            .to.be.revertedWith("PublicSHO: 0 unlock percentages");
+            .to.be.revertedWith("SHO: 0 unlock percentages");
 
         const unlockPercentagesMany = new Array(201).fill(0);
         await expect(Contract.deploy(shoToken.address, unlockPercentagesMany, unlockPeriods, initialFee, feeCollector.address, startTime))
-            .to.be.revertedWith("PublicSHO: too many unlock percentages");  
+            .to.be.revertedWith("SHO: too many unlock percentages");  
 
         await expect(Contract.deploy(shoToken.address, unlockPercentages, unlockPeriods.concat(1000), initialFee, feeCollector.address, startTime))
-            .to.be.revertedWith("PublicSHO: different array lengths"); 
+            .to.be.revertedWith("SHO: different array lengths"); 
             
         await expect(Contract.deploy(shoToken.address, unlockPercentages, unlockPeriods, 1e6 + 1, feeCollector.address, startTime))
-            .to.be.revertedWith("PublicSHO: initial fee percentage higher than 100%"); 
+            .to.be.revertedWith("SHO: initial fee percentage higher than 100%"); 
         
         await expect(Contract.deploy(shoToken.address, unlockPercentages, unlockPeriods, initialFee, ethers.constants.AddressZero, startTime))
-            .to.be.revertedWith("PublicSHO: fee collector zero address"); 
+            .to.be.revertedWith("SHO: fee collector zero address"); 
 
         await expect(Contract.deploy(shoToken.address, unlockPercentages, unlockPeriods, initialFee, feeCollector.address, 10000000))
-            .to.be.revertedWith("PublicSHO: start time must be in future"); 
+            .to.be.revertedWith("SHO: start time must be in future"); 
     }
 
     const init = async(unlockPercentages, unlockPeriods, initialFee, whitelist, shoTokenDecimals = 18) => {
@@ -71,7 +72,7 @@ describe("SHO smart contract", function() {
 
         await testConstructorRequireStatements(unlockPercentages, unlockPeriods, initialFee, startTime);
 
-        const Contract = await ethers.getContractFactory("PublicSHO");
+        const Contract = await ethers.getContractFactory("SHO");
         contract = await Contract.deploy(
             shoToken.address,
             unlockPercentages,
@@ -89,13 +90,13 @@ describe("SHO smart contract", function() {
 
         await whitelistUsers(whitelist);
 
-        await expect(contract.sync()).to.be.revertedWith("PublicSHO: before startTime");
+        await expect(contract.update()).to.be.revertedWith("SHO: before startTime");
 
         contract = contract.connect(feeCollector);
-        await expect(contract.collectFees()).to.be.revertedWith("PublicSHO: before startTime");
+        await expect(contract.collectFees()).to.be.revertedWith("SHO: before startTime");
 
         contract = contract.connect(user1);
-        await expect(contract.claim(0)).to.be.revertedWith("PublicSHO: before startTime");
+        await expect(contract.claim(0)).to.be.revertedWith("SHO: before startTime");
 
         await time.increaseTo(startTime);
     }
@@ -103,7 +104,7 @@ describe("SHO smart contract", function() {
     const collectFees = async(collectedAll, expectedBaseFee, expectedExtraFee) => {
         contract = contract.connect(feeCollector);
         if (collectedAll) {
-            await expect(contract.collectFees()).to.be.revertedWith("PublicSHO: no fees to collect");
+            await expect(contract.collectFees()).to.be.revertedWith("SHO: no fees to collect");
             return;
         }
 
@@ -132,7 +133,7 @@ describe("SHO smart contract", function() {
         contract = contract.connect(user);
 
         if (nothingToClaim) {
-            await expect(contract.claim(0)).to.be.revertedWith("PublicSHO: no tokens to claim");
+            await expect(contract.claim(0)).to.be.revertedWith("SHO: no tokens to claim");
             return;
         }
 
@@ -173,19 +174,20 @@ describe("SHO smart contract", function() {
                 300000,
                 {
                     wallets: [user1.address, user2.address, user3.address],
-                    allocations: [1000, 2000, 3000]
+                    allocations: [1000, 2000, 3000],
+                    options: [0, 0, 0]
                 }
             );
         });
 
         it("check claiming and collecting reverts", async() => {
             contract = contract.connect(feeCollector);
-            await expect(contract.claim(0)).to.be.revertedWith("PublicSHO: caller is not whitelisted");
+            await expect(contract.claim(0)).to.be.revertedWith("SHO: caller is not whitelisted");
     
             contract = contract.connect(user1);
-            await expect(contract.claim(ethers.utils.parseUnits("1", 36))).to.be.revertedWith("PublicSHO: claiming more than available");
+            await expect(contract.claim(ethers.utils.parseUnits("1", 36))).to.be.revertedWith("SHO: amount to claim higher than allocation");
 
-            await expect(contract.collectFees()).to.be.revertedWith("PublicSHO: caller is not the fee collector");
+            await expect(contract.collectFees()).to.be.revertedWith("SHO: caller is not the fee collector");
         });
 
         it("first unlock - user 1 claims", async() => {
@@ -258,7 +260,8 @@ describe("SHO smart contract", function() {
                 300000,
                 {
                     wallets: [user1.address, user2.address],
-                    allocations: [333, 666]
+                    allocations: [333, 666],
+                    options: [0, 0]
                 }
             );
         });
@@ -285,12 +288,15 @@ describe("SHO smart contract", function() {
         });
 
         it("last unlock - user 1 claims", async() => {
-            await claim(user1, false, 79.919, 0, 79.92, 79.919, 33.3);
+            await claim(user1, false, 333, 0, 79.92, 79.919, 33.3);
         });
 
         it("last unlock - user 2 claims", async() => {
             await claim(user2, false, 150, 0, 299.74, 150, 222.03);
-            await claim(user2, false, 149.73, 0, 149.73, 149.73, 0);
+            await claim(user2, false, 666, 0, 149.73, 149.73, 0);
+            
+            const contractBalance = await shoToken.balanceOf(contract.address);
+            expect(contractBalance).to.equal(0);
         });
     });
 });

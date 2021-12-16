@@ -7,12 +7,13 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "hardhat/console.sol";
 
-contract PublicSHO is Ownable, ReentrancyGuard {
+contract SHO is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint32 constant HUNDRED_PERCENT = 1e6;
 
     struct User {
+        uint8 option; // for option 0 users the fee can increase
         uint128 allocation;
         uint32 claimedUnlocksCount;
         uint32 feePercentageCurrentUnlock;
@@ -54,12 +55,12 @@ contract PublicSHO is Ownable, ReentrancyGuard {
     event Update (uint32 passedUnlocksCount);
 
     modifier onlyFeeCollector() {
-        require(feeCollector == msg.sender, "PublicSHO: caller is not the fee collector");
+        require(feeCollector == msg.sender, "SHO: caller is not the fee collector");
         _;
     }
 
     modifier onlyWhitelisted() {
-        require(users[msg.sender].allocation > 0, "PublicSHO: caller is not whitelisted");
+        require(users[msg.sender].allocation > 0, "SHO: caller is not whitelisted");
         _;
     }
 
@@ -81,18 +82,18 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         address _feeCollector,
         uint64 _startTime
     ) {
-        require(address(_shoToken) != address(0), "PublicSHO: sho token zero address");
-        require(_unlockPercentagesDiff.length > 0, "PublicSHO: 0 unlock percentages");
-        require(_unlockPercentagesDiff.length <= 200, "PublicSHO: too many unlock percentages");
-        require(_unlockPeriodsDiff.length == _unlockPercentagesDiff.length, "PublicSHO: different array lengths");
-        require(_initialFeePercentage <= HUNDRED_PERCENT, "PublicSHO: initial fee percentage higher than 100%");
-        require(_feeCollector != address(0), "PublicSHO: fee collector zero address");
-        require(_startTime > block.timestamp, "PublicSHO: start time must be in future");
+        require(address(_shoToken) != address(0), "SHO: sho token zero address");
+        require(_unlockPercentagesDiff.length > 0, "SHO: 0 unlock percentages");
+        require(_unlockPercentagesDiff.length <= 200, "SHO: too many unlock percentages");
+        require(_unlockPeriodsDiff.length == _unlockPercentagesDiff.length, "SHO: different array lengths");
+        require(_initialFeePercentage <= HUNDRED_PERCENT, "SHO: initial fee percentage higher than 100%");
+        require(_feeCollector != address(0), "SHO: fee collector zero address");
+        require(_startTime > block.timestamp, "SHO: start time must be in future");
 
         // build arrays of sums for easier calculations
         uint32[] memory _unlockPercentages = _buildArraySum(_unlockPercentagesDiff);
         uint32[] memory _unlockPeriods = _buildArraySum(_unlockPeriodsDiff);
-        require(_unlockPercentages[_unlockPercentages.length - 1] == HUNDRED_PERCENT, "PublicSHO: invalid unlock percentages");
+        require(_unlockPercentages[_unlockPercentages.length - 1] == HUNDRED_PERCENT, "SHO: invalid unlock percentages");
 
         shoToken = _shoToken;
         unlockPercentages = _unlockPercentages;
@@ -110,16 +111,20 @@ contract PublicSHO is Ownable, ReentrancyGuard {
     */
     function whitelistUsers(
         address[] calldata wallets,
-        uint128[] calldata allocations
+        uint128[] calldata allocations,
+        uint8[] calldata options
     ) external onlyOwner {
-        require(shoToken.balanceOf(address(this)) == 0, "PublicSHO: whitelisting too late");
-        require(wallets.length != 0, "PublicSHO: zero length array");
-        require(wallets.length == allocations.length, "PublicSHO: different array lengths");
+        require(shoToken.balanceOf(address(this)) == 0, "SHO: whitelisting too late");
+        require(wallets.length != 0, "SHO: zero length array");
+        require(wallets.length == allocations.length, "SHO: different array lengths");
+        require(wallets.length == options.length, "SHO: different array lengths");
 
         uint128 _globalTotalAllocation;
         for (uint256 i = 0; i < wallets.length; i++) {
             User storage user = users[wallets[i]];
-            require(user.allocation == 0, "PublicSHO: some users are already whitelisted");
+            require(user.allocation == 0, "SHO: some users are already whitelisted");
+            require(options[i] < 2, "SHO: invalid user option");
+            user.option = options[i];
             user.allocation = allocations[i];
             user.feePercentageCurrentUnlock = initialFeePercentage;
             user.feePercentageNextUnlock = initialFeePercentage;
@@ -135,7 +140,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
      */ 
     function collectFees() external onlyFeeCollector nonReentrant returns (uint128 baseFee, uint128 extraFee) {
         update();
-        require(collectedUnlocksCount < passedUnlocksCount, "PublicSHO: no fees to collect");
+        require(collectedUnlocksCount < passedUnlocksCount, "SHO: no fees to collect");
         uint32 currentUnlock = passedUnlocksCount - 1;
 
         uint32 lastUnlockPercentage = collectedUnlocksCount > 0 ? unlockPercentages[collectedUnlocksCount - 1] : 0;
@@ -159,7 +164,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
     /**
         Users can choose how much they want to claim and depending on that (ratio totalClaimed / totalUnlocked), 
         their fee for the next unlocks increases or not.
-        @param amountToClaim this amount is limited if it's greater than available amount to claim
+        @param amountToClaim needs to be less or equal to the available amount
      */
     function claim(
         uint128 amountToClaim
@@ -171,20 +176,22 @@ contract PublicSHO is Ownable, ReentrancyGuard {
     ) {
         update();
         User memory user = users[msg.sender];
-        require(passedUnlocksCount > 0, "PublicSHO: no unlocks passed");
+        require(passedUnlocksCount > 0, "SHO: no unlocks passed");
+        require(amountToClaim <= user.allocation, "SHO: amount to claim higher than allocation");
         uint32 currentUnlock = passedUnlocksCount - 1;
 
         unlockedTokens = _unlockUserTokens(user);
 
         availableToClaim = user.totalUnlocked - user.totalClaimed;
-        require(amountToClaim <= availableToClaim, "PublicSHO: claiming more than available");
-        require(availableToClaim > 0, "PublicSHO: no tokens to claim");
+        require(availableToClaim > 0, "SHO: no tokens to claim");
         
         receivedTokens = amountToClaim > availableToClaim ? availableToClaim : amountToClaim;
         user.totalClaimed += receivedTokens;
         user.claimedUnlocksCount = currentUnlock + 1;
 
-        increasedFeePercentage = _updateUserFee(user);
+        if (user.option == 0) {
+            increasedFeePercentage = _updateUserFee(user);
+        }
         
         users[msg.sender] = user;
         shoToken.safeTransfer(msg.sender, receivedTokens);
@@ -203,7 +210,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         it updates extraFees array of the next unlock by using the extra fees of the new unlock.
     */
     function update() public {
-        require(block.timestamp >= startTime, "PublicSHO: before startTime");
+        require(block.timestamp >= startTime, "SHO: before startTime");
 
         uint256 timeSinceStart = block.timestamp - startTime;
         uint256 maxReleases = unlockPeriods.length;
