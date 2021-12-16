@@ -51,7 +51,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         uint32 currentUnlock
     );
 
-    event Sync (uint32 passedUnlocksCount);
+    event Update (uint32 passedUnlocksCount);
 
     modifier onlyFeeCollector() {
         require(feeCollector == msg.sender, "PublicSHO: caller is not the fee collector");
@@ -134,7 +134,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         otherwise the fees could be collected when users claim.
      */ 
     function collectFees() external onlyFeeCollector nonReentrant returns (uint128 baseFee, uint128 extraFee) {
-        sync();
+        update();
         require(collectedUnlocksCount < passedUnlocksCount, "PublicSHO: no fees to collect");
         uint32 currentUnlock = passedUnlocksCount - 1;
 
@@ -169,7 +169,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         uint128 receivedTokens,
         uint128 unlockedTokens
     ) {
-        sync();
+        update();
         User memory user = users[msg.sender];
         require(passedUnlocksCount > 0, "PublicSHO: no unlocks passed");
         uint32 currentUnlock = passedUnlocksCount - 1;
@@ -202,7 +202,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         If there's a new unlock that is not the last unlock, 
         it updates extraFees array of the next unlock by using the extra fees of the new unlock.
     */
-    function sync() public {
+    function update() public {
         require(block.timestamp >= startTime, "PublicSHO: before startTime");
 
         uint256 timeSinceStart = block.timestamp - startTime;
@@ -227,7 +227,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
                         unlockPercentageDiffNext * extraFees[currentUnlock] / unlockPercentageDiffCurrent;
                 }
             }
-            emit Sync(_passedUnlocksCount);
+            emit Update(_passedUnlocksCount);
         } 
     }
 
