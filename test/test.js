@@ -4,7 +4,7 @@ const { time } = require("@openzeppelin/test-helpers");
 describe("SHO smart contract", function() {
     let owner, feeCollector, user1, user2, user3, contract, shoToken, shoTokenDecimals;
 
-    const PRECISION_LOSS = "1000000000000000";
+    const PRECISION_LOSS = "10000000000000000";
     
     const parseUnits = (value, decimals = shoTokenDecimals) => {
         return ethers.utils.parseUnits(value.toString(), decimals);
@@ -247,6 +247,50 @@ describe("SHO smart contract", function() {
 
             const contractBalance = await shoToken.balanceOf(contract.address);
             expect(contractBalance).to.equal(0);
+        });
+    });
+
+    describe("Full flow test 2", async() => {
+        before(async() => {
+            await init(
+                [333333, 333333, 333334],
+                [0, 1296000, 2592000],
+                300000,
+                {
+                    wallets: [user1.address, user2.address],
+                    allocations: [333, 666]
+                }
+            );
+        });
+
+        it("first unlock - user 1 claims", async() => {
+            await claim(user1, false, 0, 0, 77.7, 0, 77.7);
+            await claim(user1, false, 23.3, 0, 77.7, 23.3, 0);
+        });
+
+        it("first unlock - user 2 claims", async() => {
+            await claim(user2, false, 0, 0, 155.4, 0, 155.4);
+            await claim(user2, false, 77.69, 0.2, 155.4, 77.69, 0);
+        });
+
+        it("second unlock - user 1 claims", async() => {
+            await time.increase(1296000);
+            await claim(user1, false, 85.48, 0.4, 132.1, 85.48, 77.7);
+        });
+
+        it("last unlock - fees are collected", async() => {
+            await time.increase(2592000);
+            await collectFees(false, 299.7, 133.17);
+            await collectFees(true);
+        });
+
+        it("last unlock - user 1 claims", async() => {
+            await claim(user1, false, 79.919, 0, 79.92, 79.919, 33.3);
+        });
+
+        it("last unlock - user 2 claims", async() => {
+            await claim(user2, false, 150, 0, 299.74, 150, 222.03);
+            await claim(user2, false, 149.73, 0, 149.73, 149.73, 0);
         });
     });
 });
