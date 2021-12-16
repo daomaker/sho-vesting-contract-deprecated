@@ -172,12 +172,12 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         sync();
         User memory user = users[msg.sender];
         require(passedUnlocksCount > 0, "PublicSHO: no unlocks passed");
-        require(amountToClaim <= user.allocation, "PublicSHO: passed amount too high");
         uint32 currentUnlock = passedUnlocksCount - 1;
 
         unlockedTokens = _unlockUserTokens(user);
 
         availableToClaim = user.totalUnlocked - user.totalClaimed;
+        require(amountToClaim <= availableToClaim, "PublicSHO: claiming more than available");
         require(availableToClaim > 0, "PublicSHO: no tokens to claim");
         
         receivedTokens = amountToClaim > availableToClaim ? availableToClaim : amountToClaim;
@@ -197,7 +197,11 @@ contract PublicSHO is Ownable, ReentrancyGuard {
         );
     }
 
-    /**  Updates passedUnlocksCount */
+    /**  
+        Updates passedUnlocksCount.
+        If there's a new unlock that is not the last unlock, 
+        it updates extraFees array of the next unlock by using the extra fees of the new unlock.
+    */
     function sync() public {
         require(block.timestamp >= startTime, "PublicSHO: before startTime");
 
@@ -211,6 +215,18 @@ contract PublicSHO is Ownable, ReentrancyGuard {
 
         if (_passedUnlocksCount > passedUnlocksCount) {
             passedUnlocksCount = _passedUnlocksCount;
+
+            uint32 currentUnlock = _passedUnlocksCount - 1;
+            if (currentUnlock < unlockPeriods.length - 1) {
+                if (extraFees[currentUnlock + 1] == 0) {
+                    uint32 unlockPercentageDiffCurrent = currentUnlock > 0 ?
+                        unlockPercentages[currentUnlock] - unlockPercentages[currentUnlock - 1] : unlockPercentages[currentUnlock];
+                    uint32 unlockPercentageDiffNext = unlockPercentages[currentUnlock + 1] - unlockPercentages[currentUnlock];
+                    
+                    extraFees[currentUnlock + 1] = extraFees[currentUnlock] +
+                        unlockPercentageDiffNext * extraFees[currentUnlock] / unlockPercentageDiffCurrent;
+                }
+            }
             emit Sync(_passedUnlocksCount);
         } 
     }
@@ -225,11 +241,7 @@ contract PublicSHO is Ownable, ReentrancyGuard {
                 user.feePercentageNextUnlock = claimedRatio;
 
                 uint128 tokensNextUnlock = user.allocation * (unlockPercentages[currentUnlock + 1] - unlockPercentages[currentUnlock]) / HUNDRED_PERCENT;
-                uint128 extraFee = tokensNextUnlock * increasedFeePercentage / HUNDRED_PERCENT; 
-                if (extraFees[currentUnlock + 1] == 0 && extraFees[currentUnlock] > 0) {
-                    extraFees[currentUnlock + 1] = extraFees[currentUnlock] +
-                        unlockPercentages[currentUnlock + 1] * extraFees[currentUnlock] / unlockPercentages[currentUnlock];
-                }
+                uint128 extraFee = tokensNextUnlock * increasedFeePercentage / HUNDRED_PERCENT;
                 extraFees[currentUnlock + 1] += extraFee;
             }
         }

@@ -183,7 +183,7 @@ describe("SHO smart contract", function() {
             await expect(contract.claim(0)).to.be.revertedWith("PublicSHO: caller is not whitelisted");
     
             contract = contract.connect(user1);
-            await expect(contract.claim(ethers.utils.parseUnits("1", 36))).to.be.revertedWith("PublicSHO: passed amount too high");
+            await expect(contract.claim(ethers.utils.parseUnits("1", 36))).to.be.revertedWith("PublicSHO: claiming more than available");
 
             await expect(contract.collectFees()).to.be.revertedWith("PublicSHO: caller is not the fee collector");
         });
@@ -223,6 +223,30 @@ describe("SHO smart contract", function() {
         it("second unlock - fees are collected", async() => {
             await collectFees(false, 540, 330);
             await collectFees(true);
+        });
+
+        it("last unlock - user 1 has nothing to claim", async() => {
+            await time.increase(2592000);
+            await claim(user1, true);
+        });
+
+        it("last unlock - fees are collected", async() => {
+            await collectFees(false, 360, 220);
+            await collectFees(true);
+        });
+
+        it("last unlock - user 2 claims", async() => {
+            await claim(user2, false, 350, 0, 700, 350, 200);
+            await claim(user2, false, 350, 0, 350, 350, 0);
+            await claim(user2, true);
+        });
+
+        it("last unlock - user 3 claims", async() => {
+            await claim(user3, false, 1596, 0, 1596, 1596, 420);
+            await claim(user3, true);
+
+            const contractBalance = await shoToken.balanceOf(contract.address);
+            expect(contractBalance).to.equal(0);
         });
     });
 });
