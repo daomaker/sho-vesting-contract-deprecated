@@ -13,9 +13,12 @@ contract SHO is Ownable, ReentrancyGuard {
     uint32 constant HUNDRED_PERCENT = 1e6;
 
     struct User {
-        uint8 option; // for option 0 users the fee can increase
+        // for option 0 the fee may increase when claiming
+        // for option 1 users, only the owner can increase their fees to 100% (due to an off-chain non-compliance)
+        uint8 option;
+
         uint128 allocation;
-        uint32 claimedUnlocksCount;
+        uint32 unlockedBatchesCount;
         uint32 feePercentageCurrentUnlock;
         uint32 feePercentageNextUnlock;
 
@@ -40,19 +43,29 @@ contract SHO is Ownable, ReentrancyGuard {
     event Claim (
         address user,
         uint32 currentUnlock,
+        uint128 unlockedTokens,
         uint32 increasedFeePercentage,
-        uint128 receivedTokens,
-        uint128 unlockedTokens
+        uint128 receivedTokens
+    );
+
+    event UserElimination (
+        address user,
+        uint32 currentUnlock,
+        uint128 unlockedTokens,
+        uint32 increasedFeePercentage
     );
 
     event FeeCollection (
+        uint32 currentUnlock,
         uint128 totalFee,
         uint128 baseFee,
-        uint128 extraFee,
-        uint32 currentUnlock
+        uint128 extraFee
     );
 
-    event Update (uint32 passedUnlocksCount);
+    event Update (
+        uint32 passedUnlocksCount,
+        uint128 extraFeesAdded
+    );
 
     modifier onlyFeeCollector() {
         require(feeCollector == msg.sender, "SHO: caller is not the fee collector");
@@ -134,6 +147,26 @@ contract SHO is Ownable, ReentrancyGuard {
         globalTotalAllocation = _globalTotalAllocation;
     }
 
+    function eliminateOption1User(address userAddress) external onlyOwner returns (uint128 unlockedTokens) {
+        update();
+        User memory user = users[userAddress];
+        require(passedUnlocksCount > 0, "SHO: no unlocks passed");
+        require(user.option == 1, "SHO: not option 1 user");
+        require(user.feePercentageNextUnlock < HUNDRED_PERCENT, "SHO: user already eliminated");
+
+        uint32 currentUnlock = passedUnlocksCount - 1;
+        unlockedTokens = _unlockUserTokens(user);
+        uint32 increasedFeePercentage = _updateUserFee(user, HUNDRED_PERCENT);
+
+        users[userAddress] = user;
+        emit UserElimination (
+            userAddress,
+            currentUnlock,
+            unlockedTokens,
+            increasedFeePercentage
+        );
+    }
+
     /**
         It's important that the fees are collectable not depedning on if users are claiming, 
         otherwise the fees could be collected when users claim.
@@ -154,10 +187,10 @@ contract SHO is Ownable, ReentrancyGuard {
         collectedUnlocksCount = currentUnlock + 1;
         shoToken.safeTransfer(msg.sender, totalFee);
         emit FeeCollection(
+            currentUnlock,
             totalFee, 
             baseFee, 
-            extraFee, 
-            currentUnlock
+            extraFee
         );
     }
 
@@ -169,10 +202,10 @@ contract SHO is Ownable, ReentrancyGuard {
     function claim(
         uint128 amountToClaim
     ) external onlyWhitelisted nonReentrant returns (
+        uint128 unlockedTokens,
         uint32 increasedFeePercentage,
         uint128 availableToClaim, 
-        uint128 receivedTokens,
-        uint128 unlockedTokens
+        uint128 receivedTokens
     ) {
         update();
         User memory user = users[msg.sender];
@@ -187,10 +220,10 @@ contract SHO is Ownable, ReentrancyGuard {
         
         receivedTokens = amountToClaim > availableToClaim ? availableToClaim : amountToClaim;
         user.totalClaimed += receivedTokens;
-        user.claimedUnlocksCount = currentUnlock + 1;
 
         if (user.option == 0) {
-            increasedFeePercentage = _updateUserFee(user);
+            uint32 claimedRatio = uint32(user.totalClaimed * HUNDRED_PERCENT / user.totalUnlocked);
+            increasedFeePercentage = _updateUserFee(user, claimedRatio);
         }
         
         users[msg.sender] = user;
@@ -198,9 +231,9 @@ contract SHO is Ownable, ReentrancyGuard {
         emit Claim(
             msg.sender, 
             currentUnlock, 
+            unlockedTokens,
             increasedFeePercentage,
-            receivedTokens,
-            unlockedTokens
+            receivedTokens
         );
     }
 
@@ -224,28 +257,28 @@ contract SHO is Ownable, ReentrancyGuard {
             passedUnlocksCount = _passedUnlocksCount;
 
             uint32 currentUnlock = _passedUnlocksCount - 1;
+            uint128 extraFeesAdded;
             if (currentUnlock < unlockPeriods.length - 1) {
                 if (extraFees[currentUnlock + 1] == 0) {
                     uint32 unlockPercentageDiffCurrent = currentUnlock > 0 ?
                         unlockPercentages[currentUnlock] - unlockPercentages[currentUnlock - 1] : unlockPercentages[currentUnlock];
                     uint32 unlockPercentageDiffNext = unlockPercentages[currentUnlock + 1] - unlockPercentages[currentUnlock];
                     
-                    extraFees[currentUnlock + 1] = extraFees[currentUnlock] +
+                    extraFeesAdded = extraFees[currentUnlock + 1] = extraFees[currentUnlock] +
                         unlockPercentageDiffNext * extraFees[currentUnlock] / unlockPercentageDiffCurrent;
                 }
             }
-            emit Update(_passedUnlocksCount);
+            emit Update(_passedUnlocksCount, extraFeesAdded);
         } 
     }
 
-    function _updateUserFee(User memory user) private returns (uint32 increasedFeePercentage) {
+    function _updateUserFee(User memory user, uint32 potentiallyNextFeePercentage) private returns (uint32 increasedFeePercentage) {
         uint32 currentUnlock = passedUnlocksCount - 1;
 
         if (currentUnlock < unlockPeriods.length - 1) {
-            uint32 claimedRatio = uint32(user.totalClaimed * HUNDRED_PERCENT / user.totalUnlocked);
-            if (claimedRatio > user.feePercentageNextUnlock) {
-                increasedFeePercentage = claimedRatio - user.feePercentageNextUnlock;
-                user.feePercentageNextUnlock = claimedRatio;
+            if (potentiallyNextFeePercentage > user.feePercentageNextUnlock) {
+                increasedFeePercentage = potentiallyNextFeePercentage - user.feePercentageNextUnlock;
+                user.feePercentageNextUnlock = potentiallyNextFeePercentage;
 
                 uint128 tokensNextUnlock = user.allocation * (unlockPercentages[currentUnlock + 1] - unlockPercentages[currentUnlock]) / HUNDRED_PERCENT;
                 uint128 extraFee = tokensNextUnlock * increasedFeePercentage / HUNDRED_PERCENT;
@@ -257,13 +290,14 @@ contract SHO is Ownable, ReentrancyGuard {
     function _unlockUserTokens(User memory user) private view returns (uint128 unlockedTokens) {
         uint32 currentUnlock = passedUnlocksCount - 1;
 
-        if (user.claimedUnlocksCount <= currentUnlock) {
+        if (user.unlockedBatchesCount <= currentUnlock) {
             user.feePercentageCurrentUnlock = user.feePercentageNextUnlock;
 
-            uint32 lastUnlockPercentage = user.claimedUnlocksCount > 0 ? unlockPercentages[user.claimedUnlocksCount - 1] : 0;
+            uint32 lastUnlockPercentage = user.unlockedBatchesCount > 0 ? unlockPercentages[user.unlockedBatchesCount - 1] : 0;
             unlockedTokens = user.allocation * (unlockPercentages[currentUnlock] - lastUnlockPercentage) / HUNDRED_PERCENT;
             unlockedTokens -= unlockedTokens * user.feePercentageCurrentUnlock / HUNDRED_PERCENT;
             user.totalUnlocked += unlockedTokens;
+            user.unlockedBatchesCount = currentUnlock + 1;
         }
     }
 
