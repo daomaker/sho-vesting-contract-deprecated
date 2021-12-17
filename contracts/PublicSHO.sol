@@ -147,6 +147,10 @@ contract SHO is Ownable, ReentrancyGuard {
         globalTotalAllocation = _globalTotalAllocation;
     }
 
+    /**
+        Increases an option 1 user's next unlock fee to 100%.
+        @param userAddress - whitelisted user's address to eliminate
+     */
     function eliminateOption1User(address userAddress) external onlyOwner returns (uint128 unlockedTokens) {
         update();
         User memory user = users[userAddress];
