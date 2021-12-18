@@ -39,26 +39,33 @@ contract SHO is Ownable, ReentrancyGuard {
     uint32 public collectedUnlocksCount;
     uint128[] public extraFees;
 
-    event Claim (
+
+    event Whitelist(
         address user,
-        uint32 currentUnlock,
-        uint128 unlockedTokens,
-        uint32 increasedFeePercentage,
-        uint128 receivedTokens
+        uint128 allocation,
+        uint8 option
     );
 
-    event UserElimination (
+    event UserElimination(
         address user,
         uint32 currentUnlock,
         uint128 unlockedTokens,
         uint32 increasedFeePercentage
     );
 
-    event FeeCollection (
+    event FeeCollection(
         uint32 currentUnlock,
         uint128 totalFee,
         uint128 baseFee,
         uint128 extraFee
+    );
+
+    event Claim(
+        address user,
+        uint32 currentUnlock,
+        uint128 unlockedTokens,
+        uint32 increasedFeePercentage,
+        uint128 receivedTokens
     );
 
     event Update (
@@ -118,22 +125,22 @@ contract SHO is Ownable, ReentrancyGuard {
 
     /** 
         Whitelisting shall be allowed only until the SHO token is received for security reasons.
-        @param wallets addresses to whitelist
+        @param userAddresses addresses to whitelist
         @param allocations users total allocation
     */
     function whitelistUsers(
-        address[] calldata wallets,
+        address[] calldata userAddresses,
         uint128[] calldata allocations,
         uint8[] calldata options
     ) external onlyOwner {
         require(shoToken.balanceOf(address(this)) == 0, "SHO: whitelisting too late");
-        require(wallets.length != 0, "SHO: zero length array");
-        require(wallets.length == allocations.length, "SHO: different array lengths");
-        require(wallets.length == options.length, "SHO: different array lengths");
+        require(userAddresses.length != 0, "SHO: zero length array");
+        require(userAddresses.length == allocations.length, "SHO: different array lengths");
+        require(userAddresses.length == options.length, "SHO: different array lengths");
 
         uint128 _globalTotalAllocation;
-        for (uint256 i = 0; i < wallets.length; i++) {
-            User storage user = users[wallets[i]];
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            User storage user = users[userAddresses[i]];
             require(user.allocation == 0, "SHO: some users are already whitelisted");
             require(options[i] < 2, "SHO: invalid user option");
             user.option = options[i];
@@ -142,32 +149,43 @@ contract SHO is Ownable, ReentrancyGuard {
             user.feePercentageNextUnlock = initialFeePercentage;
         
             _globalTotalAllocation += allocations[i];
+
+            emit Whitelist(
+                userAddresses[i],
+                allocations[i],
+                options[i]
+            );
         }
         globalTotalAllocation = _globalTotalAllocation;
     }
 
     /**
         Increases an option 1 user's next unlock fee to 100%.
-        @param userAddress - whitelisted user's address to eliminate
+        @param userAddresses whitelisted user addresses to eliminate
      */
-    function eliminateOption1User(address userAddress) external onlyOwner returns (uint128 unlockedTokens) {
+    function eliminateOption1Users(address[] calldata userAddresses) external onlyOwner {
         update();
-        User memory user = users[userAddress];
         require(passedUnlocksCount > 0, "SHO: no unlocks passed");
-        require(user.option == 1, "SHO: not option 1 user");
-        require(user.feePercentageNextUnlock < HUNDRED_PERCENT, "SHO: user already eliminated");
-
         uint32 currentUnlock = passedUnlocksCount - 1;
-        unlockedTokens = _unlockUserTokens(user);
-        uint32 increasedFeePercentage = _updateUserFee(user, HUNDRED_PERCENT);
+        require(currentUnlock < unlockPeriods.length - 1, "SHO: eliminating in the last unlock");
 
-        users[userAddress] = user;
-        emit UserElimination (
-            userAddress,
-            currentUnlock,
-            unlockedTokens,
-            increasedFeePercentage
-        );
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            address userAddress = userAddresses[i];
+            User memory user = users[userAddress];
+            require(user.option == 1, "SHO: some user not option 1");
+            require(user.feePercentageNextUnlock < HUNDRED_PERCENT, "SHO: some user already eliminated");
+
+            uint128 unlockedTokens = _unlockUserTokens(user);
+            uint32 increasedFeePercentage = _updateUserFee(user, HUNDRED_PERCENT);
+
+            users[userAddress] = user;
+            emit UserElimination(
+                userAddress,
+                currentUnlock,
+                unlockedTokens,
+                increasedFeePercentage
+            );
+        }
     }
 
     /**

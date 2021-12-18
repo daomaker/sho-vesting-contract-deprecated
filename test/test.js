@@ -164,24 +164,18 @@ describe("SHO smart contract", function() {
 
     const eliminate = async(
         user, 
-        eliminatedAlready,
-        expectedUnlockedTokens
+        eliminatedAlready
     ) => {
         contract = contract.connect(owner);
 
         if (eliminatedAlready) {
-            await expect(contract.eliminateOption1User(user.address)).to.be.revertedWith("SHO: user already eliminated");
+            await expect(contract.eliminateOption1Users([user.address])).to.be.revertedWith("SHO: some user already eliminated");
             return;
         }
 
-        expectedUnlockedTokens = parseUnits(expectedUnlockedTokens);
-
-        const unlockedTokens = await contract.callStatic.eliminateOption1User(user.address);
-        await expect(unlockedTokens).to.closeTo(expectedUnlockedTokens, PRECISION_LOSS);
-
         const contractBalanceBefore = await shoToken.balanceOf(contract.address);
         const userInfoBefore = await contract.users(user.address);
-        await contract.eliminateOption1User(user.address);
+        await contract.eliminateOption1Users([user.address]);
         const contractBalanceAfter = await shoToken.balanceOf(contract.address);
         const userInfoAfter = await contract.users(user.address);
         expect(contractBalanceAfter).to.equal(contractBalanceBefore);
@@ -189,7 +183,6 @@ describe("SHO smart contract", function() {
         expect(userInfoBefore.allocation).to.equal(userInfoAfter.allocation);
         expect(userInfoAfter.feePercentageCurrentUnlock).to.equal(userInfoBefore.feePercentageCurrentUnlock);
         expect(userInfoAfter.feePercentageNextUnlock).to.equal(1e6);
-        expect(userInfoAfter.totalUnlocked).to.equal(userInfoBefore.totalUnlocked.add(unlockedTokens));
         expect(userInfoAfter.totalClaimed).to.equal(userInfoBefore.totalClaimed);
     }
 
@@ -358,16 +351,16 @@ describe("SHO smart contract", function() {
 
         it("check reverts", async() => {
             contract = contract.connect(owner);
-            await expect(contract.eliminateOption1User(user1.address)).to.be.revertedWith("SHO: no unlocks passed");
+            await expect(contract.eliminateOption1Users([user1.address])).to.be.revertedWith("SHO: no unlocks passed");
 
             await time.increase(100);
 
             contract = contract.connect(user1);
-            await expect(contract.eliminateOption1User(user2.address)).to.be.revertedWith("Ownable: caller is not the owner");
+            await expect(contract.eliminateOption1Users([user2.address])).to.be.revertedWith("Ownable: caller is not the owner");
 
             contract = contract.connect(owner);
-            await expect(contract.eliminateOption1User(user3.address)).to.be.revertedWith("SHO: not option 1 user");
-            await expect(contract.eliminateOption1User(feeCollector.address)).to.be.revertedWith("SHO: not option 1 user");
+            await expect(contract.eliminateOption1Users([user3.address])).to.be.revertedWith("SHO: some user not option 1");
+            await expect(contract.eliminateOption1Users([feeCollector.address, user2.address])).to.be.revertedWith("SHO: some user not option 1");
         });
 
         it("first unlock - user 1 claims", async() => {
@@ -420,6 +413,9 @@ describe("SHO smart contract", function() {
 
             const contractBalance = await shoToken.balanceOf(contract.address);
             expect(contractBalance).to.equal(0);
+
+            contract = contract.connect(owner);
+            await expect(contract.eliminateOption1Users([])).to.be.revertedWith("SHO: eliminating in the last unlock");
         });
     });
 });
